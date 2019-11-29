@@ -10,6 +10,7 @@
 #include <linux/sched.h>
 #include <linux/wait.h>
 #include <linux/uaccess.h>
+#include <linux/poll.h>
 
 // Definitions
 
@@ -109,7 +110,7 @@ static void irq_handler_detecting(struct tagtagtagear_data *priv);
 static irqreturn_t tagtagtagear_irq_handler(int irq, void *dev_id);
 
 static int ear_open(struct inode *inode, struct file *file);
-static int ear_release(struct inode *inode, struct file *filp);
+static int ear_release(struct inode *inode, struct file *file);
 static int ear_read(struct file *file, char __user *buffer, size_t len, loff_t *offset);
 static int ear_write(struct file *file, const char __user *buffer, size_t len, loff_t *offset);
 
@@ -195,10 +196,14 @@ static void transition_to_running(struct tagtagtagear_data *priv, int position, 
         priv->state.running.count = delta;
         priv->state.running.direction = 1;
         start_motors_forward(priv);
-    } else {
+    } else if (delta < 0) {
         priv->state.running.count = -delta;
         priv->state.running.direction = -1;
         start_motors_backward(priv);
+    } else {
+        del_timer_sync(&priv->broken_timer);
+        stop_motors(priv);  // We need to stop motors if we transitioned from detecting.
+        transition_to_idle(priv, position);
     }
 }
 
@@ -508,7 +513,7 @@ static int ear_open(struct inode *inode, struct file *file) {
     return 0;
 }
 
-static int ear_release(struct inode *inode, struct file *filp) {
+static int ear_release(struct inode *inode, struct file *file) {
     struct tagtagtagear_data *ear_data;
     ear_data = container_of(inode->i_cdev, struct tagtagtagear_data, cdev);
     ear_data->opened = 0;
@@ -614,12 +619,33 @@ static int ear_write(struct file *file, const char __user *buffer, size_t len, l
     return 0;
 }
 
+static unsigned int ear_poll(struct file *file, poll_table *wait) {
+    struct tagtagtagear_data *priv = (struct tagtagtagear_data *) file->private_data;
+    unsigned int mask = 0;
+
+    poll_wait(file, &priv->write_wq,  wait);
+    poll_wait(file, &priv->read_wq, wait);
+
+    if (priv->state_e == broken) {
+        mask |= POLLHUP;
+    } else {
+        if (priv->state_e == idle) {
+            mask |= POLLOUT | POLLWRNORM;
+        }
+        if (priv->read_result_available != 0) {
+            mask |= POLLIN | POLLRDNORM;
+        }
+    }
+    return mask;
+}
+
 static struct file_operations ear_fops = {
     .owner = THIS_MODULE,
     .open = ear_open,
     .read = ear_read,
     .write = ear_write,
     .release = ear_release,
+    .poll = ear_poll,
 };
 
 // ========================================================================== //
@@ -638,14 +664,6 @@ static int init_ear(struct device *dev, struct tagtagtagear_data *priv, struct c
             dev_err(dev, "Failed to get 'encoder' gpio for %s: %d", encoder_name, err);
         return err;
     }
-
-    // Request interrupts from encoder GPIOs
-    irq = gpiod_to_irq(priv->encoder_gpio);
-    err = devm_request_any_context_irq(dev, irq,
-                    tagtagtagear_irq_handler, IRQF_TRIGGER_RISING,
-                    DRV_NAME, priv);
-    if (err < 0)
-        return err;
 
     priv->motor_gpios = devm_gpiod_get_array(dev, motor_name, GPIOD_OUT_LOW);
     if (IS_ERR(priv->motor_gpios)) {
@@ -672,6 +690,14 @@ static int init_ear(struct device *dev, struct tagtagtagear_data *priv, struct c
 
     // Setup timer for broken ears
     timer_setup(&priv->broken_timer, tagtagtagear_broken_timer_cb, 0);
+
+    // Request interrupts from encoder GPIOs
+    irq = gpiod_to_irq(priv->encoder_gpio);
+    err = devm_request_any_context_irq(dev, irq,
+                    tagtagtagear_irq_handler, IRQF_TRIGGER_RISING,
+                    DRV_NAME, priv);
+    if (err < 0)
+        return err;
 
     // Setup wait queues
     init_waitqueue_head(&priv->read_wq);
@@ -732,13 +758,19 @@ static int tagtagtagears_remove(struct platform_device *pdev) {
     int ix;
     priv = platform_get_drvdata(pdev);
 
-    for (ix = 1; ix >= 0; ix--) {
-        del_timer_sync(&priv->ear[ix].broken_timer);
-        device_destroy(priv->ears_class, MKDEV(MAJOR(priv->chrdev), MINOR(priv->chrdev) + ix));
-        cdev_del(&priv->ear[ix].cdev);
+    if (priv->chrdev) {
+        if (priv->ears_class) {
+            for (ix = 1; ix >= 0; ix--) {
+                if (priv->ear[ix].cdev.ops) {
+                    del_timer_sync(&priv->ear[ix].broken_timer);
+                    device_destroy(priv->ears_class, MKDEV(MAJOR(priv->chrdev), MINOR(priv->chrdev) + ix));
+                    cdev_del(&priv->ear[ix].cdev);
+                }
+            }
+            class_destroy(priv->ears_class);
+        }
+        unregister_chrdev_region(priv->chrdev, 2);
     }
-    class_destroy(priv->ears_class);
-    unregister_chrdev_region(priv->chrdev, 2);
     return 0;
 }
 
