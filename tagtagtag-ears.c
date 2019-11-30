@@ -253,7 +253,7 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
         priv->state.testing.holes_count++;
 
         if (priv->state.testing.holes_count == NUM_HOLES) {
-            unsigned long min, max, gap, half_max;
+            unsigned long min, max, gap, half_max, first_delta, second_delta;
             int gap_ix = 0;
             int ix;
 
@@ -261,18 +261,21 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
             del_timer_sync(&priv->broken_timer);
             stop_motors(priv);
             // We should have 16 approximatively equivalent deltas and one at least twice larger.
-            min = priv->state.testing.hole_deltas[0];
-            max = priv->state.testing.hole_deltas[0];
-            gap = priv->state.testing.hole_deltas[0];
-            for (ix = 1; ix < NUM_HOLES; ix++) {
+            first_delta = priv->state.testing.hole_deltas[0];
+            second_delta = priv->state.testing.hole_deltas[1];
+            min = min(first_delta, second_delta);
+            max = min;
+            gap = max(first_delta, second_delta);
+            for (ix = 2; ix < NUM_HOLES; ix++) {
                 unsigned long this_delta = priv->state.testing.hole_deltas[ix];
                 if (min > this_delta) {
                     min = this_delta;
-                }
-                if (gap < this_delta) {
+                } else if (gap < this_delta) {
                     max = gap;
                     gap = this_delta;
                     gap_ix = ix;
+                } else if (max < this_delta) {
+                    max = this_delta;
                 }
             }
             half_max = max >> 1;
