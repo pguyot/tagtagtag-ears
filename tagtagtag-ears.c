@@ -203,6 +203,9 @@ static void transition_to_running(struct tagtagtagear_data *priv, int position, 
     } else {
         del_timer_sync(&priv->broken_timer);
         stop_motors(priv);  // We need to stop motors if we transitioned from detecting.
+        if (priv->read_result_available == 1) {
+            priv->read_result = position;
+        }
         transition_to_idle(priv, position);
     }
 }
@@ -285,8 +288,12 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
             } else {
                 // if gap_ix was the first delta (0), we ran a full turn and position is 16
                 // if gap_ix was the last delta (16), we are at 0.
+                int position = NUM_HOLES - 1 - gap_ix;
                 priv->detect_boundary_us = (max + gap) >> 1;
-                transition_to_idle(priv, NUM_HOLES - 1 - gap_ix);
+                if (priv->read_result_available == 1) {
+                    priv->read_result = position;
+                }
+                transition_to_idle(priv, position);
             }
         } else {
             reset_broken_timer(priv);
@@ -400,8 +407,10 @@ static irqreturn_t tagtagtagear_irq_handler(int irq, void *dev_id) {
 // Protocol:
 // 1. Can only be opened once
 // 2. Writing is blocking/non-blocking depending on the state:
-// - in idle mode, writing is non blocking, command is executed and ear might transition to running/detecting
-// - in testing/running/detecting mode, writing is blocked until ear is in idle/broken mode.
+// - in idle mode, writing is non blocking, command is executed and ear might
+//   transition to running/detecting
+// - in testing/running/detecting mode, writing is blocked until ear is in
+//   idle/broken mode.
 // - in broken mode, writing fails.
 // 3. Reading is blocking until a value is to be read.
 
@@ -446,24 +455,25 @@ static irqreturn_t tagtagtagear_irq_handler(int irq, void *dev_id) {
 // Next read byte is 0-16 (position).
 
 // When a get current position command finishes, read returns -1 or 0-16.
-// Otherwise, reading blocks until ear is moved by user. Then it returns 'm'
-// and this clears a flag (consequently next read is blocked until ear is moved
-// again).
+// Otherwise, reading blocks until ear is moved by user. Then it returns 'm'.
+// Any move operation clears the "moved flag". When this flag is cleared, driver
+// returns the last known position (before/after move depending on when read
+// is performed).
 
-// Turn, move and get position commands clear "moved flag" (next available byte).
+// Get position commands also overwrite this "moved flag".
 
 static void move_forward(struct tagtagtagear_data *priv, unsigned char arg) {
-    priv->read_result_available = 0;
+    priv->read_result = priv->state.idle.position;
     transition_to_running(priv, priv->state.idle.position, arg);
 }
 
 static void move_backward(struct tagtagtagear_data *priv, unsigned char arg) {
-    priv->read_result_available = 0;
+    priv->read_result = priv->state.idle.position;
     transition_to_running(priv, priv->state.idle.position, -arg);
 }
 
 static void goto_forward(struct tagtagtagear_data *priv, unsigned char arg) {
-    priv->read_result_available = 0;
+    priv->read_result = priv->state.idle.position;
     if (priv->state.idle.position == -1) {
         transition_to_detecting(priv, goto_position, 1, arg);
     } else if (priv->state.idle.position != arg) {
@@ -476,7 +486,7 @@ static void goto_forward(struct tagtagtagear_data *priv, unsigned char arg) {
 }
 
 static void goto_backward(struct tagtagtagear_data *priv, unsigned char arg) {
-    priv->read_result_available = 0;
+    priv->read_result = priv->state.idle.position;
     if (priv->state.idle.position == -1) {
         transition_to_detecting(priv, goto_position, -1, arg);
     } else if (priv->state.idle.position != arg) {
