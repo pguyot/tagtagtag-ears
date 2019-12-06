@@ -342,7 +342,13 @@ static void irq_handler_running(struct tagtagtagear_data *priv) {
 static void irq_handler_detecting(struct tagtagtagear_data *priv) {
     ktime_t now = ktime_get_raw();
     if (priv->state.detecting.last_hole_time == 0) {
-        priv->state.detecting.holes_count++;
+        // We were between two holes.
+        // Synchronize on the next hole in forward direction:
+        // if we turn backward, consider the ear was on previous hole
+        if (priv->state.detecting.direction < 0) {
+            priv->state.detecting.holes_count++;
+        }
+        priv->state.detecting.last_hole_time = ktime_get_raw();
         reset_broken_timer(priv);
     } else {
         unsigned long delta = (unsigned long) ktime_us_delta(now, priv->state.detecting.last_hole_time);
