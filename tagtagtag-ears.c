@@ -165,11 +165,6 @@ static void reset_broken_timer(struct tagtagtagear_data *priv) {
 static void transition_to_testing(struct tagtagtagear_data *priv) {
     priv->state_e = testing;
     memset(&priv->state, 0, sizeof(priv->state));
-    if (gpiod_get_value(priv->encoder_gpio) == 1) {
-        priv->state.testing.last_hole_time = ktime_get_raw();
-    } else {
-        priv->state.testing.last_hole_time = 0;
-    }
     reset_broken_timer(priv);
     start_motors_forward(priv);
 }
