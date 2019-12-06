@@ -370,6 +370,13 @@ static void irq_handler_detecting(struct tagtagtagear_data *priv) {
                     running_delta = 17 - running_delta;
                 }
             }
+            // Minimize movement.
+            while (running_delta > 9) {
+                running_delta -= 17;
+            }
+            while (running_delta < -9) {
+                running_delta += 17;
+            }
             transition_to_running(priv, 0, running_delta);
         } else {
             priv->state.detecting.last_hole_time = now;
