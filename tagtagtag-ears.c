@@ -319,7 +319,7 @@ static void irq_handler_idle(struct tagtagtagear_data *priv) {
 //
 static void irq_handler_running(struct tagtagtagear_data *priv) {
     if (priv->state.running.position != -1) {
-        priv->state.running.position = priv->state.running.position + priv->state.running.direction % NUM_HOLES;
+        priv->state.running.position = (priv->state.running.position + priv->state.running.direction) % NUM_HOLES;
         if (priv->state.running.position < 0) {
             priv->state.running.position += NUM_HOLES;
         }
