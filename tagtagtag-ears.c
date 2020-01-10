@@ -5,13 +5,13 @@
 //   __   __   __   __   __   __   __   __   __   __   __   __   __   __   __
 // _|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
 //
-// 15  16   17                   0    1    2    3    4    5    6    7    8
-//   __   __   _________________   __   __   __   __   __   __   __   __   __
-// _|  |_|  |_|                 |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
+// 15  16                   0    1    2    3    4    5    6    7    8    9
+//   __   _________________   __   __   __   __   __   __   __   __   __   __
+// _|  |_|                 |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
 //
 // Quick measurements on "normally workings" Tag & TagTag show that:
 // signal is high for 0.12-0.15 sec (average 0.13) with the exception of the gap
-// where it is high for 0.75 sec (as wide as 3 holes)
+// where it is high for 0.75 sec (as wide as 4 holes)
 // signal is low for 0.06-0.09 sec (average 0.07)
 // A complete turn takes 4 seconds.
 
