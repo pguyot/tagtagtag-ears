@@ -1,3 +1,21 @@
+// Signal of encoder GPIO when the ear is turning (motors are on) looks like
+// this:
+//
+// 0    1    2    3    4    5    6    7    8    9   10   11   12   13   14
+//   __   __   __   __   __   __   __   __   __   __   __   __   __   __   __
+// _|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
+//
+// 15  16   17                   0    1    2    3    4    5    6    7    8
+//   __   __   _________________   __   __   __   __   __   __   __   __   __
+// _|  |_|  |_|                 |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
+//
+// Quick measurements on "normally workings" Tag & TagTag show that:
+// signal is high for 0.12-0.15 sec (average 0.13) with the exception of the gap
+// where it is high for 0.75 sec (as wide as 3 holes)
+// signal is low for 0.06-0.09 sec (average 0.07)
+// A complete turn takes 4 seconds.
+
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
@@ -17,7 +35,7 @@
 #define DRV_NAME "tagtagtag-ears"
 #define DEVICE_NAME "ear"
 #define NUM_HOLES 17
-#define BROKEN_TIMEOUT_SECS 3
+#define BROKEN_TIMEOUT_SECS 4
 
 // Data structures
 
@@ -37,7 +55,8 @@ enum detecting_post_state_e {
 struct ear_state_testing {
     int holes_count;
     ktime_t last_hole_time;
-    unsigned long hole_deltas[17];
+    unsigned long hole_deltas[NUM_HOLES];
+    int forward_position;
 };
 
 struct ear_state_detecting {
@@ -144,13 +163,20 @@ static void stop_motors(struct tagtagtagear_data *priv) {
 
 //
 // Callback when timer is fired.
-// Simply declare ear as broken and stop motors.
+// In testing mode, declare ear as broken.
+// In any other mode, transition to idle with unknown position.
+// Always stop motors.
 //
 static void tagtagtagear_broken_timer_cb(struct timer_list *t) {
     struct tagtagtagear_data *priv = from_timer(priv, t, broken_timer);
-    dev_err(priv->device, "timeout, declaring ear as broken");
     stop_motors(priv);
-    transition_to_broken(priv);
+    if (priv->state_e == testing) {
+        dev_err(priv->device, "timeout, declaring ear as broken");
+        transition_to_broken(priv);
+    } else {
+        dev_err(priv->device, "timeout, giving up (position is thereupon unknown)");
+        transition_to_idle(priv, -1);
+    }
 }
 
 static void reset_broken_timer(struct tagtagtagear_data *priv) {
@@ -211,7 +237,7 @@ static void transition_to_detecting(struct tagtagtagear_data *priv, enum detecti
     priv->state.detecting.post_state = post_state;
     priv->state.detecting.direction = direction;
     priv->state.detecting.new_position = new_position;
-    if (gpiod_get_value(priv->encoder_gpio) == 1) {
+    if (gpiod_get_value(priv->encoder_gpio) == 0) {
         priv->state.detecting.last_hole_time = ktime_get_raw();
     } else {
         priv->state.detecting.last_hole_time = 0;
@@ -231,8 +257,8 @@ static void transition_to_detecting(struct tagtagtagear_data *priv, enum detecti
 //
 // IRQ Handler in testing state
 //
-// Count the number of holes, stop at 17.
-// For every hole, compute the delta time with the previous RISING IRQ.
+// Count the number of holes, stop at NUM_HOLES.
+// For every hole, compute the delta time with the previous FALLING IRQ.
 // Eventually, use the average between the maximum "normal" delta and the "gap"
 // delta as a boundary for future detection.
 //
@@ -246,52 +272,86 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
         reset_broken_timer(priv);
     } else {
         ktime_t now = ktime_get_raw();
-        priv->state.testing.hole_deltas[priv->state.testing.holes_count] = ktime_us_delta(now, priv->state.testing.last_hole_time);
-        priv->state.testing.last_hole_time = now;
-        priv->state.testing.holes_count++;
+        if (priv->state.testing.holes_count < NUM_HOLES) {
+            priv->state.testing.hole_deltas[priv->state.testing.holes_count] = ktime_us_delta(now, priv->state.testing.last_hole_time);
+            priv->state.testing.last_hole_time = now;
+            priv->state.testing.holes_count++;
 
-        if (priv->state.testing.holes_count == NUM_HOLES) {
-            unsigned long min, max, gap, half_max, first_delta, second_delta;
-            int gap_ix = 0;
-            int ix;
+            if (priv->state.testing.holes_count == NUM_HOLES) {
+                unsigned long min, max, gap, half_max, first_delta, second_delta;
+                int gap_ix = 0;
+                int ix;
 
-            // End of testing.
+                // End of forward testing. Stop motors.
+                del_timer_sync(&priv->broken_timer);
+                stop_motors(priv);
+                // We should have 16 approximatively equivalent deltas and one at least twice larger.
+                first_delta = priv->state.testing.hole_deltas[0];
+                second_delta = priv->state.testing.hole_deltas[1];
+                min = min(first_delta, second_delta);
+                max = min;
+                gap = max(first_delta, second_delta);
+                for (ix = 2; ix < NUM_HOLES; ix++) {
+                    unsigned long this_delta = priv->state.testing.hole_deltas[ix];
+                    if (min > this_delta) {
+                        min = this_delta;
+                    } else if (gap < this_delta) {
+                        max = gap;
+                        gap = this_delta;
+                        gap_ix = ix;
+                    } else if (max < this_delta) {
+                        max = this_delta;
+                    }
+                }
+                half_max = max >> 1;
+                if (gap < (max + half_max)) {
+                    dev_err(priv->device, "gap is not obvious (max = %lu, gap = %lu), declaring ear as broken", max, gap);
+                    transition_to_broken(priv);
+                } else {
+                    // if gap_ix was the first delta (0), we ran a full turn and position is 16
+                    // if gap_ix was the last delta (16), we are at 0.
+                    priv->state.testing.forward_position = NUM_HOLES - 1 - gap_ix;
+                    priv->detect_boundary_us = (max + gap) >> 1;
+                    if (priv->detect_boundary_us > 1000000) {
+                        dev_warn(priv->device, "Ear is abnormally slow (gap = %lu usec, typically 800ms)", gap);
+                    }
+                    start_motors_backward(priv);
+                    reset_broken_timer(priv);
+                }
+            } else {
+                reset_broken_timer(priv);
+            }
+        } else {
+            unsigned long backward_delta = ktime_us_delta(now, priv->state.testing.last_hole_time);
+            int broken = 0;
+            int position;
+            // We were running backward one position to test backward motor.
+            // End of backward testing. Stop motors.
             del_timer_sync(&priv->broken_timer);
             stop_motors(priv);
-            // We should have 16 approximatively equivalent deltas and one at least twice larger.
-            first_delta = priv->state.testing.hole_deltas[0];
-            second_delta = priv->state.testing.hole_deltas[1];
-            min = min(first_delta, second_delta);
-            max = min;
-            gap = max(first_delta, second_delta);
-            for (ix = 2; ix < NUM_HOLES; ix++) {
-                unsigned long this_delta = priv->state.testing.hole_deltas[ix];
-                if (min > this_delta) {
-                    min = this_delta;
-                } else if (gap < this_delta) {
-                    max = gap;
-                    gap = this_delta;
-                    gap_ix = ix;
-                } else if (max < this_delta) {
-                    max = this_delta;
+            if (priv->state.testing.forward_position == 0) {
+                if (backward_delta < priv->detect_boundary_us) {
+                    dev_err(priv->device, "Incoherent backward delta, got %lu, expected more than %lu", backward_delta, priv->detect_boundary_us);
+                    broken = 1;
+                }
+            } else {
+                if (backward_delta > priv->detect_boundary_us) {
+                    dev_err(priv->device, "Incoherent backward delta, got %lu, expected less than %lu", backward_delta, priv->detect_boundary_us);
+                    broken = 1;
                 }
             }
-            half_max = max >> 1;
-            if (gap < (max + half_max)) {
-                dev_err(priv->device, "missing hole is not obvious (max = %lu, gap = %lu), declaring ear as broken", max, gap);
-                transition_to_broken(priv);
-            } else {
-                // if gap_ix was the first delta (0), we ran a full turn and position is 16
-                // if gap_ix was the last delta (16), we are at 0.
-                int position = NUM_HOLES - 1 - gap_ix;
-                priv->detect_boundary_us = (max + gap) >> 1;
+            position = priv->state.testing.forward_position - 1;
+            if (position < 0) {
+                position += NUM_HOLES;
+            }
+            if (broken == 0) {
                 if (priv->read_result_available == 1) {
                     priv->read_result = position;
                 }
                 transition_to_idle(priv, position);
+            } else {
+                transition_to_broken(priv);
             }
-        } else {
-            reset_broken_timer(priv);
         }
     }
 }
@@ -358,24 +418,24 @@ static void irq_handler_detecting(struct tagtagtagear_data *priv) {
             int running_delta;
             if (priv->state.detecting.post_state == read_position) {
                 // We moved priv->state.detecting.position steps before reaching 0.
-                // Previous position was x + priv->state.detecting.position = 17
-                // x = 17 - priv->state.detecting.position
-                running_delta = 17 - priv->state.detecting.holes_count;
+                // Previous position was x + priv->state.detecting.position = NUM_HOLES
+                // x = NUM_HOLES - priv->state.detecting.position
+                running_delta = NUM_HOLES - priv->state.detecting.holes_count;
                 priv->read_result_available = 1;
                 priv->read_result = running_delta;
                 wake_up_interruptible(&priv->read_wq);
             } else {
                 running_delta = priv->state.detecting.new_position;
                 if (priv->state.detecting.direction < 0) {
-                    running_delta = 17 - running_delta;
+                    running_delta = NUM_HOLES - running_delta;
                 }
             }
             // Minimize movement.
             while (running_delta > 9) {
-                running_delta -= 17;
+                running_delta -= NUM_HOLES;
             }
             while (running_delta < -9) {
-                running_delta += 17;
+                running_delta += NUM_HOLES;
             }
             transition_to_running(priv, 0, running_delta);
         } else {
@@ -428,42 +488,49 @@ static irqreturn_t tagtagtagear_irq_handler(int irq, void *dev_id) {
 // NOP command
 // Command = '.'
 // Blocks until ear is in idle mode.
+// $ echo -n -e '.' > /dev/ear0
 
 // Turn forward command
 // Command = '+'
 // Parameter = N (single byte)
 // Turn forward N steps. Transition to running mode then idle or broken.
+// $ echo -n -e '+\x01' > /dev/ear0
 
 // Turn backward command
 // Command = '-'
 // Parameter = N (single byte)
 // Turn backward N steps. Transition to running mode then idle or broken.
+// $ echo -n -e '-\x01' > /dev/ear0
 
 // Move to specific position, forward.
 // Command = '>'
 // Parameter = P (single byte)
 // May not turn at all.
-// Turn forward until reaching position P mod 17
-// If P >= 17, perform P div 17 complete turns.
+// Turn forward until reaching position P mod NUM_HOLES
+// If P >= NUM_HOLES, perform P div NUM_HOLES complete turns.
 // If position is unknown, perform first a position detection, forward.
+// $ echo -n -e '>\x00' > /dev/ear0
 
 // Move to specific position, backward.
 // Command = '<'
 // Parameter = P (single byte)
 // May not turn at all.
-// Turn backward until reaching position P mod 17
-// If P >= 17, perform P div 17 complete turns.
+// Turn backward until reaching position P mod NUM_HOLES
+// If P >= NUM_HOLES, perform P div NUM_HOLES complete turns.
 // If position is unknown, perform first a position detection, backward.
+// $ echo -n -e '<\x00' > /dev/ear0
 
 // Get current position.
 // Command = '?'
 // Will not turn.
 // Next read byte is 0-16 (position) or -1 (unknown)
+// $ echo -n -e '?' > /dev/ear0 && dd if=/dev/ear0 of=/dev/stdout count=1 bs=1 status=none | hexdump -e '/1 "%d\n"'
 
 // Get current position, performing a position detection if required (forward)
 // Command = '!'
 // May not turn.
 // Next read byte is 0-16 (position).
+// $ echo -n -e '!' > /dev/ear0 && dd if=/dev/ear0 of=/dev/stdout count=1 bs=1 status=none | hexdump -e '/1 "%d\n"'
 
 // When a get current position command finishes, read returns -1 or 0-16.
 // Otherwise, reading blocks until ear is moved by user. Then it returns 'm'.
@@ -490,7 +557,7 @@ static void goto_forward(struct tagtagtagear_data *priv, unsigned char arg) {
     } else if (priv->state.idle.position != arg) {
         int delta = arg - priv->state.idle.position;
         if (delta < 0) {
-            delta += 17;
+            delta += NUM_HOLES;
         }
         transition_to_running(priv, priv->state.idle.position, delta);
     }
@@ -503,7 +570,7 @@ static void goto_backward(struct tagtagtagear_data *priv, unsigned char arg) {
     } else if (priv->state.idle.position != arg) {
         int delta = priv->state.idle.position - arg;
         if (delta > 0) {
-            delta -= 17;
+            delta -= NUM_HOLES;
         }
         transition_to_running(priv, priv->state.idle.position, delta);
     }
@@ -718,7 +785,7 @@ static int init_ear(struct device *dev, struct tagtagtagear_data *priv, struct c
     // Request interrupts from encoder GPIOs
     irq = gpiod_to_irq(priv->encoder_gpio);
     err = devm_request_any_context_irq(dev, irq,
-                    tagtagtagear_irq_handler, IRQF_TRIGGER_RISING,
+                    tagtagtagear_irq_handler, IRQF_TRIGGER_FALLING,
                     DRV_NAME, priv);
     if (err < 0)
         return err;
