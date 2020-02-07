@@ -143,13 +143,13 @@ static int tagtagtagears_remove(struct platform_device *pdev);
 // ========================================================================== //
 
 static void start_motors_backward(struct tagtagtagear_data *priv) {
-    gpiod_set_value(priv->motor_gpios->desc[0], 0);
-    gpiod_set_value(priv->motor_gpios->desc[1], 1);
+    gpiod_set_value(priv->motor_gpios->desc[0], 1);
+    gpiod_set_value(priv->motor_gpios->desc[1], 0);
 }
 
 static void start_motors_forward(struct tagtagtagear_data *priv) {
-    gpiod_set_value(priv->motor_gpios->desc[0], 1);
-    gpiod_set_value(priv->motor_gpios->desc[1], 0);
+    gpiod_set_value(priv->motor_gpios->desc[0], 0);
+    gpiod_set_value(priv->motor_gpios->desc[1], 1);
 }
 
 static void stop_motors(struct tagtagtagear_data *priv) {
