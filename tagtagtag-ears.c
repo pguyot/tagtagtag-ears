@@ -37,6 +37,9 @@
 #define NUM_HOLES 17
 #define BROKEN_TIMEOUT_SECS 4
 
+// Offset between physical 0 (big hole) and logical 0 (ears up)
+#define POSITION_OFFSET 3
+
 // Data structures
 
 enum ear_state_e {
@@ -592,6 +595,20 @@ static void get_position(struct tagtagtagear_data *priv, int run_detection) {
     }
 }
 
+static unsigned char position_physical_to_logical(unsigned char position) {
+    if ((position >= 0) && (position < NUM_HOLES)) {
+        return (position - POSITION_OFFSET + NUM_HOLES) % NUM_HOLES;
+    }
+    return position;
+}
+
+static unsigned char position_logical_to_physical(unsigned char position) {
+    if ((position >= 0) && (position < NUM_HOLES)) {
+        return (position + POSITION_OFFSET) % NUM_HOLES;
+    }
+    return position;
+}
+
 static int ear_open(struct inode *inode, struct file *file) {
     struct tagtagtagear_data *ear_data;
     ear_data = container_of(inode->i_cdev, struct tagtagtagear_data, cdev);
@@ -623,7 +640,8 @@ static int ear_read(struct file *file, char __user *buffer, size_t len, loff_t *
         return 0;
     }
     if (priv->read_result_available) {
-        if (copy_to_user(buffer, &priv->read_result, 1)) {
+        char logical_position = position_physical_to_logical(priv->read_result);
+        if (copy_to_user(buffer, &logical_position, 1)) {
             return -EFAULT;
         }
         priv->read_result_available = 0;
@@ -648,6 +666,7 @@ static int ear_write(struct file *file, const char __user *buffer, size_t len, l
         char kbuffer[2];
         int kbuffer_size = 0;
         int read = 0;
+        unsigned char position = 0;
         if (priv->buffer_size > 0) {
             // Just missing parameter
             kbuffer[0] = priv->buffer[0];
@@ -675,25 +694,28 @@ static int ear_write(struct file *file, const char __user *buffer, size_t len, l
             }
         }
         priv->buffer_size = 0;
+
+        position = position_logical_to_physical((unsigned char)kbuffer[1]);
+
         switch (kbuffer[0]) {
             case '.':
                 // NOP.
                 break;
 
             case '+':
-                move_forward(priv, (unsigned char) kbuffer[1]);
+                move_forward(priv, position);
                 break;
 
             case '-':
-                move_backward(priv, (unsigned char) kbuffer[1]);
+                move_backward(priv, position);
                 break;
 
             case '>':
-                goto_forward(priv, (unsigned char) kbuffer[1]);
+                goto_forward(priv, position);
                 break;
 
             case '<':
-                goto_backward(priv, (unsigned char) kbuffer[1]);
+                goto_backward(priv, position);
                 break;
 
             case '?':
