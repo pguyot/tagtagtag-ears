@@ -574,7 +574,7 @@ static void goto_backward(struct tagtagtagear_data *priv, unsigned char arg) {
     if (priv->state.idle.position == -1) {
         transition_to_detecting(priv, goto_position, -1, arg);
     } else if (priv->state.idle.position != arg) {
-        int delta = priv->state.idle.position - arg;
+        int delta = arg - priv->state.idle.position;
         if (delta > 0) {
             delta -= NUM_HOLES;
         }
