@@ -1,11 +1,11 @@
 // Signal of encoder GPIO when the ear is turning (motors are on) looks like
 // this:
 //
-// 0    1    2    3    4    5    6    7    8    9   10   11   12   13   14
+//15   16    0    1    2    3    4    5    6    7    8    9   10   11   12
 //   __   __   __   __   __   __   __   __   __   __   __   __   __   __   __
 // _|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
 //
-// 15  16                   0    1    2    3    4    5    6    7    8    9
+// 13  14                  15   16    0    1    2    3    4    5    6    7
 //   __   _________________   __   __   __   __   __   __   __   __   __   __
 // _|  |_|                 |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
 //
@@ -14,7 +14,8 @@
 // where it is high for 0.75 sec (as wide as 4 holes)
 // signal is low for 0.06-0.09 sec (average 0.07)
 // A complete turn takes 4 seconds.
-
+// This diagram does take EARS_OFFZERO into account. Indeed, with original
+// bytecode (nominal.mtl), position after the gap is -EARS_OFFZERO.
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -36,6 +37,7 @@
 #define DEVICE_NAME "ear"
 #define NUM_HOLES 17
 #define BROKEN_TIMEOUT_SECS 4
+#define EARS_OFFZERO 2
 
 // Data structures
 
@@ -308,9 +310,13 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
                     dev_err(priv->device, "gap is not obvious (max = %lu, gap = %lu), declaring ear as broken", max, gap);
                     transition_to_broken(priv);
                 } else {
-                    // if gap_ix was the first delta (0), we ran a full turn and position is 16
-                    // if gap_ix was the last delta (16), we are at 0.
-                    priv->state.testing.forward_position = NUM_HOLES - 1 - gap_ix;
+                    // if gap_ix was the first delta (0), we ran a full turn and position is 16-EARS_OFFZERO
+                    // if gap_ix was the last delta (16), we are at 0-EARS_OFFZERO.
+                    int forward_position = NUM_HOLES - 1 - gap_ix - EARS_OFFZERO;
+                    if (forward_position < 0) {
+                        forward_position += NUM_HOLES;
+                    }
+                    priv->state.testing.forward_position = forward_position;
                     priv->detect_boundary_us = (max + gap) >> 1;
                     if (priv->detect_boundary_us > 1000000) {
                         dev_warn(priv->device, "Ear is abnormally slow (gap = %lu usec, typically 800ms)", gap);
@@ -329,7 +335,7 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
             // End of backward testing. Stop motors.
             del_timer_sync(&priv->broken_timer);
             stop_motors(priv);
-            if (priv->state.testing.forward_position == 0) {
+            if (priv->state.testing.forward_position == NUM_HOLES - EARS_OFFZERO) {
                 if (backward_delta < priv->detect_boundary_us) {
                     dev_err(priv->device, "Incoherent backward delta, got %lu, expected more than %lu", backward_delta, priv->detect_boundary_us);
                     broken = 1;
