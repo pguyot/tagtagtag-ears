@@ -15,19 +15,22 @@
 				brcm,pins = <23>;
 				brcm,function = <0>;	// in
 			};
-			gpio_motor_left_cw_pin: gpio_motor_left_cw_pin@12 {
+                        // left: when looking at the rabbit (matching hardware spec)
+                        // forward: for the rabbit's left ear (right), counter-clock-wise
+                        // for the rabbit's right ear (left below), clock-wise
+			gpio_motor_left_forward_pin: gpio_motor_left_forward_pin@12 {
 				brcm,pins = <12>;
 				brcm,function = <1>;	// out
 			};
-			gpio_motor_left_ccw_pin: gpio_motor_left_ccw_pin@11 {
+			gpio_motor_left_backward_pin: gpio_motor_left_backward_pin@11 {
 				brcm,pins = <11>;
 				brcm,function = <1>;	// out
 			};
-			gpio_motor_right_cw_pin: gpio_motor_right_cw_pin@10 {
+			gpio_motor_right_forward_pin: gpio_motor_right_forward_pin@10 {
 				brcm,pins = <10>;
 				brcm,function = <1>;	// out
 			};
-			gpio_motor_right_ccw_pin: gpio_motor_right_ccw_pin@9 {
+			gpio_motor_right_backward_pin: gpio_motor_right_backward_pin@9 {
 				brcm,pins = <9>;
 				brcm,function = <1>;	// out
 			};
@@ -39,14 +42,14 @@
             tagtagtag_ears: tagtagtag-ears {
                 compatible = "linux,tagtagtag-ears";
                 left-encoder-gpio = <&gpio 24 0>;
-                left-motor-gpios = <&gpio 12 1 &gpio 11 1>;
+                left-motor-gpios = <&gpio 12 0 &gpio 11 0>;
                 right-encoder-gpio = <&gpio 23 0>;
-                right-motor-gpios = <&gpio 10 1 &gpio 9 1>;
+                right-motor-gpios = <&gpio 10 0 &gpio 9 0>;
 
                 // Declare a single pinctrl state (referencing the one declared above) and name it
                 // default, so it is activated automatically.
                 pinctrl-names = "default";
-                pinctrl-0 = <&gpio_encoder_left_pin &gpio_motor_left_cw_pin &gpio_motor_left_ccw_pin &gpio_encoder_right_pin &gpio_motor_right_cw_pin &gpio_motor_right_ccw_pin>;
+                pinctrl-0 = <&gpio_encoder_left_pin &gpio_motor_left_forward_pin &gpio_motor_left_backward_pin &gpio_encoder_right_pin &gpio_motor_right_forward_pin &gpio_motor_right_backward_pin>;
             };
         };
     };
