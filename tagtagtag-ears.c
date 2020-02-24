@@ -1,11 +1,11 @@
 // Signal of encoder GPIO when the ear is turning (motors are on) looks like
 // this:
 //
-//15   16    0    1    2    3    4    5    6    7    8    9   10   11   12
+//14   15   16    0    1    2    3    4    5    6    7    8    9   10   11
 //   __   __   __   __   __   __   __   __   __   __   __   __   __   __   __
 // _|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
 //
-// 13  14                  15   16    0    1    2    3    4    5    6    7
+// 12  13                  14   15   16    0    1    2    3    4    5    6
 //   __   _________________   __   __   __   __   __   __   __   __   __   __
 // _|  |_|                 |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |_|  |
 //
@@ -14,8 +14,17 @@
 // where it is high for 0.75 sec (as wide as 4 holes)
 // signal is low for 0.06-0.09 sec (average 0.07)
 // A complete turn takes 4 seconds.
-// This diagram does take EARS_OFFZERO into account. Indeed, with original
-// bytecode (nominal.mtl), position after the gap is -EARS_OFFZERO.
+// The diagram above does take EARS_OFFZERO into account. EARS_OFFZERO allow
+// ears to be vertical at 0 and horizontal at 10. Original bytecode
+// (nominal.mtl) used a value of 2 (here we use 3) because it counted on high
+// positions, which is less precise, and probably a bug as can be seen by trying
+// to position ears at 14, 15 and back to 14.
+//
+// The signal is low for a small period. We get IRQ on falling edge (high to
+// low), which is the best moment to stop motors. Nevertheless, inertia can
+// bring signal high again. We only transition to idle state when signal is low
+// after motors have been stopped. If signal is high when a command is received
+// in idle state, we consider ears were moved and position is therefore unknown.
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -37,7 +46,7 @@
 #define DEVICE_NAME "ear"
 #define NUM_HOLES 17
 #define BROKEN_TIMEOUT_SECS 4
-#define EARS_OFFZERO 2
+#define EARS_OFFZERO 3
 
 // Data structures
 
@@ -55,28 +64,28 @@ enum detecting_post_state_e {
 };
 
 struct ear_state_testing {
-    int holes_count;
+    int forward_position:6;         // 0-16
+    unsigned int holes_count:5;     // 0-16
     ktime_t last_hole_time;
     unsigned long hole_deltas[NUM_HOLES];
-    int forward_position;
 };
 
 struct ear_state_detecting {
+    unsigned int new_position:5;    // 0-16
+    int direction:2;                // 1: forward, -1: backward
+    int holes_count:5;              // 0-17
     enum detecting_post_state_e post_state;
-    int direction;  // 1: forward, -1: backward
-    int new_position;
-    int holes_count;   // counter of found holes_count
     ktime_t last_hole_time;
 };
 
 struct ear_state_idle {
-    int position;   // 0-16 or -1 for unknown.
+    int position:6;         // -1 or 0-16
 };
 
 struct ear_state_running {
-    int position;   // 0-16 or -1 for unknown.
-    int count;
-    int direction;  // 1: forward, -1: backward
+    int position:6;         // -1 or 0-16
+    int direction:2;        // 1: forward, -1: backward
+    uint8_t count; // number of steps to run for
 };
 
 union ear_state {
@@ -98,8 +107,8 @@ struct tagtagtagear_data {
     int read_result_available;
     char read_result;
 	char buffer[1];
-	int buffer_size;
-	int opened;
+	int buffer_size:1;      // 0-1
+	int opened:1;           // 0-1
     enum ear_state_e state_e;
     union ear_state state;
 };
@@ -139,6 +148,7 @@ static int init_ear(struct device *dev, struct tagtagtagear_data *priv, struct c
 static int tagtagtagears_probe(struct platform_device *pdev);
 static int tagtagtagears_remove(struct platform_device *pdev);
 
+static int position_add(int position, int increment);
 
 // ========================================================================== //
 // Motors
@@ -190,6 +200,31 @@ static void reset_broken_timer(struct tagtagtagear_data *priv) {
 // State transitions
 // ========================================================================== //
 
+static int position_add(int position, int increment) {
+    int result = position + increment;
+    if (result < 0) {
+        result += NUM_HOLES;
+    } else if (result >= NUM_HOLES) {
+        result -= NUM_HOLES;
+    }
+    return result;
+}
+
+// Get position, setting it to unknown if gpio is high.
+static int get_idle_position(struct tagtagtagear_data *priv) {
+    int is_high = gpiod_get_value(priv->encoder_gpio);
+    if (is_high && priv->state.idle.position != -1) {
+        // Ear was moved.
+        priv->state.idle.position = -1;
+        if (priv->read_result_available == 0) {
+            priv->read_result_available = 1;
+            priv->read_result = 'm';
+            wake_up_interruptible(&priv->read_wq);
+        }
+    }
+    return priv->state.idle.position;
+}
+
 static void transition_to_testing(struct tagtagtagear_data *priv) {
     priv->state_e = testing;
     memset(&priv->state, 0, sizeof(priv->state));
@@ -234,15 +269,16 @@ static void transition_to_running(struct tagtagtagear_data *priv, int position, 
 }
 
 static void transition_to_detecting(struct tagtagtagear_data *priv, enum detecting_post_state_e post_state, int direction, int new_position) {
+    int is_high = gpiod_get_value(priv->encoder_gpio);
     priv->state_e = detecting;
     memset(&priv->state, 0, sizeof(priv->state));
     priv->state.detecting.post_state = post_state;
     priv->state.detecting.direction = direction;
     priv->state.detecting.new_position = new_position;
-    if (gpiod_get_value(priv->encoder_gpio) == 0) {
-        priv->state.detecting.last_hole_time = ktime_get_raw();
-    } else {
+    if (is_high) {
         priv->state.detecting.last_hole_time = 0;
+    } else {
+        priv->state.detecting.last_hole_time = ktime_get_raw();
     }
     reset_broken_timer(priv);
     if (direction > 0) {
@@ -346,10 +382,7 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
                     broken = 1;
                 }
             }
-            position = priv->state.testing.forward_position - 1;
-            if (position < 0) {
-                position += NUM_HOLES;
-            }
+            position = position_add(priv->state.testing.forward_position, -1);
             if (broken == 0) {
                 if (priv->read_result_available == 1) {
                     priv->read_result = position;
@@ -385,16 +418,30 @@ static void irq_handler_idle(struct tagtagtagear_data *priv) {
 //
 static void irq_handler_running(struct tagtagtagear_data *priv) {
     if (priv->state.running.position != -1) {
-        priv->state.running.position = (priv->state.running.position + priv->state.running.direction) % NUM_HOLES;
-        if (priv->state.running.position < 0) {
-            priv->state.running.position += NUM_HOLES;
-        }
+        priv->state.running.position = position_add(priv->state.running.position, priv->state.running.direction);
     }
     priv->state.running.count--;
     if (priv->state.running.count == 0) {
+        int is_high;
         del_timer_sync(&priv->broken_timer);
         stop_motors(priv);
-        transition_to_idle(priv, priv->state.running.position);
+        is_high = gpiod_get_value(priv->encoder_gpio);
+        if (is_high) {
+            // Move backward.
+            priv->state.running.count = 1;
+            if (priv->state.running.direction > 0) {
+                priv->state.running.direction = -1;
+                priv->state.running.position = position_add(priv->state.running.position, 1);
+                start_motors_backward(priv);
+            } else {
+                priv->state.running.direction = 1;
+                priv->state.running.position = position_add(priv->state.running.position, -1);
+                start_motors_backward(priv);
+            }
+            reset_broken_timer(priv);
+        } else {
+            transition_to_idle(priv, priv->state.running.position);
+        }
     } else {
         reset_broken_timer(priv);
     }
@@ -421,19 +468,26 @@ static void irq_handler_detecting(struct tagtagtagear_data *priv) {
         priv->state.detecting.holes_count++;
         if (delta > priv->detect_boundary_us) {
             // Found gap.
+            // We are at -EARS_OFFZERO.
             int running_delta;
             if (priv->state.detecting.post_state == read_position) {
-                // We moved priv->state.detecting.position steps before reaching 0.
-                // Previous position was x + priv->state.detecting.position = NUM_HOLES
-                // x = NUM_HOLES - priv->state.detecting.position
-                running_delta = NUM_HOLES - priv->state.detecting.holes_count;
+                // We moved priv->state.detecting.holes_count steps before reaching -EARS_OFFZERO
+                // Previous position (x) was such: x + priv->state.detecting.holes_count = NUM_HOLES-EARS_OFFZERO
+                // x = NUM_HOLES - priv->state.detecting.holes_count - EARS_OFFZERO
+                int previous_position = NUM_HOLES - priv->state.detecting.holes_count - EARS_OFFZERO;
+                if (previous_position < 0) {
+                    previous_position += NUM_HOLES;
+                }
                 priv->read_result_available = 1;
-                priv->read_result = running_delta;
+                priv->read_result = previous_position;
                 wake_up_interruptible(&priv->read_wq);
+                // To reach previous position, we need to move further previous_position + EARS_OFFZERO
+                running_delta = position_add(previous_position, EARS_OFFZERO);
             } else {
-                running_delta = priv->state.detecting.new_position;
+                // To reach new_position, we need to move further new_position + EARS_OFFZERO
+                running_delta = position_add(priv->state.detecting.new_position, EARS_OFFZERO);
                 if (priv->state.detecting.direction < 0) {
-                    running_delta = NUM_HOLES - running_delta;
+                    running_delta -= NUM_HOLES;
                 }
             }
             // Minimize movement.
@@ -443,7 +497,7 @@ static void irq_handler_detecting(struct tagtagtagear_data *priv) {
             while (running_delta < -9) {
                 running_delta += NUM_HOLES;
             }
-            transition_to_running(priv, 0, running_delta);
+            transition_to_running(priv, NUM_HOLES - EARS_OFFZERO, running_delta);
         } else {
             priv->state.detecting.last_hole_time = now;
             reset_broken_timer(priv);
@@ -547,43 +601,49 @@ static irqreturn_t tagtagtagear_irq_handler(int irq, void *dev_id) {
 // Get position commands also overwrite this "moved flag".
 
 static void move_forward(struct tagtagtagear_data *priv, unsigned char arg) {
-    priv->read_result = priv->state.idle.position;
-    transition_to_running(priv, priv->state.idle.position, arg);
+    int position = get_idle_position(priv);
+    priv->read_result = position;
+    transition_to_running(priv, position, arg);
 }
 
 static void move_backward(struct tagtagtagear_data *priv, unsigned char arg) {
-    priv->read_result = priv->state.idle.position;
-    transition_to_running(priv, priv->state.idle.position, -arg);
+    int position = get_idle_position(priv);
+    priv->read_result = position;
+    transition_to_running(priv, position, -arg);
 }
 
 static void goto_forward(struct tagtagtagear_data *priv, unsigned char arg) {
-    priv->read_result = priv->state.idle.position;
-    if (priv->state.idle.position == -1) {
+    int position = get_idle_position(priv);
+    priv->read_result = position;
+    if (position == -1) {
         transition_to_detecting(priv, goto_position, 1, arg);
-    } else if (priv->state.idle.position != arg) {
-        int delta = arg - priv->state.idle.position;
+    } else {
+        // Always transition to running: if we overran, we will return.
+        int delta = arg - position;
         if (delta < 0) {
             delta += NUM_HOLES;
         }
-        transition_to_running(priv, priv->state.idle.position, delta);
+        transition_to_running(priv, position, delta);
     }
 }
 
 static void goto_backward(struct tagtagtagear_data *priv, unsigned char arg) {
-    priv->read_result = priv->state.idle.position;
-    if (priv->state.idle.position == -1) {
+    int position = get_idle_position(priv);
+    priv->read_result = position;
+    if (position == -1) {
         transition_to_detecting(priv, goto_position, -1, arg);
-    } else if (priv->state.idle.position != arg) {
-        int delta = arg - priv->state.idle.position;
+    } else {
+        int delta = arg - position;
         if (delta > 0) {
             delta -= NUM_HOLES;
         }
-        transition_to_running(priv, priv->state.idle.position, delta);
+        transition_to_running(priv, position, delta);
     }
 }
 
 static void get_position(struct tagtagtagear_data *priv, int run_detection) {
-    if (priv->state.idle.position == -1) {
+    int position = get_idle_position(priv);
+    if (position == -1) {
         if (run_detection) {
             transition_to_detecting(priv, read_position, 1, 0);
         } else {
