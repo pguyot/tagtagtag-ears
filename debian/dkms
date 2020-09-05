@@ -1,0 +1,5 @@
+PACKAGE_NAME="tagtagtag-ears"
+PACKAGE_VERSION="#MODULE_VERSION#"
+BUILT_MODULE_NAME[0]="tagtagtag-ears"
+DEST_MODULE_LOCATION[0]="/kernel/input/misc"
+AUTOINSTALL=yes
