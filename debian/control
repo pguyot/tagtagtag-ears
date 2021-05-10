@@ -1,0 +1,14 @@
+Source: tagtagtag-ears
+Section: unknown
+Priority: optional
+Maintainer: Guilhem Lettron <guilhem@barpilot.io>
+Build-Depends: debhelper-compat (= 13), dkms
+Standards-Version: 4.5.0
+Homepage: https://github.com/pguyot/tagtagtag-ears
+Rules-Requires-Root: no
+
+Package: tagtagtag-ears-dkms
+Architecture: all
+Depends: ${misc:Depends}
+Description: Linux driver for tagtagtag ears
+  Creates /dev/ear0 (left) and /dev/ear1 (right) to drive tagtagtag ears.
