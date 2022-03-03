@@ -141,8 +141,8 @@ static irqreturn_t tagtagtagear_irq_handler(int irq, void *dev_id);
 
 static int ear_open(struct inode *inode, struct file *file);
 static int ear_release(struct inode *inode, struct file *file);
-static int ear_read(struct file *file, char __user *buffer, size_t len, loff_t *offset);
-static int ear_write(struct file *file, const char __user *buffer, size_t len, loff_t *offset);
+static ssize_t ear_read(struct file *file, char __user *buffer, size_t len, loff_t *offset);
+static ssize_t ear_write(struct file *file, const char __user *buffer, size_t len, loff_t *offset);
 
 static int init_ear(struct device *dev, struct tagtagtagear_data *priv, struct class *ears_class, int major, int minor, const char* encoder_name, const char* motor_name);
 static int tagtagtagears_probe(struct platform_device *pdev);
@@ -677,7 +677,7 @@ static int ear_release(struct inode *inode, struct file *file) {
     return 0;
 }
 
-static int ear_read(struct file *file, char __user *buffer, size_t len, loff_t *offset) {
+static ssize_t ear_read(struct file *file, char __user *buffer, size_t len, loff_t *offset) {
     struct tagtagtagear_data *priv = (struct tagtagtagear_data *) file->private_data;
     if (priv->state_e == broken) {
         return 0;
@@ -698,7 +698,7 @@ static int ear_read(struct file *file, char __user *buffer, size_t len, loff_t *
     return 0;
 }
 
-static int ear_write(struct file *file, const char __user *buffer, size_t len, loff_t *offset) {
+static ssize_t ear_write(struct file *file, const char __user *buffer, size_t len, loff_t *offset) {
     struct tagtagtagear_data *priv = (struct tagtagtagear_data *) file->private_data;
     if (wait_event_interruptible(priv->write_wq, priv->state_e == broken || priv->state_e == idle)) {
         return -ERESTARTSYS;
