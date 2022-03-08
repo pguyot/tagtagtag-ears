@@ -846,7 +846,7 @@ static int init_ear(struct device *dev, struct tagtagtagear_data *priv, struct c
     }
 
     // Setup timer for broken ears
-    timer_setup(&priv->broken_timer, tagtagtagear_broken_timer_cb, 0);
+    timer_setup(&priv->broken_timer, tagtagtagear_broken_timer_cb, TIMER_IRQSAFE);
 
     // Request interrupts from encoder GPIOs
     irq = gpiod_to_irq(priv->encoder_gpio);
