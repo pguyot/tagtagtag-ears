@@ -5,7 +5,7 @@ obj-m += tagtagtag-ears.o
 dtbo-y += tagtagtag-ears.dtbo
 
 targets += $(dtbo-y)
-always := $(dtbo-y)
+always-y := $(dtbo-y)
 
 all:
 	make -C /lib/modules/$(KERNELRELEASE)/build M=$(PWD) modules
