@@ -5,16 +5,28 @@ Creates `/dev/ear0` (left) and `/dev/ear1` (right) to drive tagtagtag ears.
 
 ## Installation
 
+Install requirements
+
+    sudo apt-get install raspberrypi-kernel-headers
+
+Clone source code.
+
+    git clone https://github.com/pguyot/tagtagtag-ears
+
+Compile and install with
+
+    cd tagtagtag-ears
     make
     sudo make install
 
-This adds:
+Makefile will automatically edit /boot/config.txt and add/enable if required
+the following params and overlays:
 
     dtoverlay=tagtagtag-ears
 
-to /boot/config.txt
+You might want to review changes before rebooting.
 
-    reboot
+Reboot.
 
 ## Usage
 

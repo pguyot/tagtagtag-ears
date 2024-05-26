@@ -39,6 +39,7 @@
 #include <linux/wait.h>
 #include <linux/uaccess.h>
 #include <linux/poll.h>
+#include <linux/version.h>
 
 // Definitions
 
@@ -885,7 +886,12 @@ static int tagtagtagears_probe(struct platform_device *pdev) {
     }
 
 	// Create device class
-	priv->ears_class = class_create(THIS_MODULE, DEVICE_NAME);
+    #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
+        priv->ears_class = class_create(THIS_MODULE, DEVICE_NAME);
+    #else
+            priv->ears_class = class_create(DEVICE_NAME);
+    #endif
+
 	if (IS_ERR(priv->ears_class)) {
 		err = PTR_ERR(priv->ears_class);
         dev_err(dev, "class_create failed: %d", err);
