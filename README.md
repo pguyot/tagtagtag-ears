@@ -5,6 +5,12 @@ Creates `/dev/ear0` (left) and `/dev/ear1` (right) to drive tagtagtag ears.
 
 ## Installation
 
+Clone source code:
+
+    git clone https://github.com/pguyot/tagtagtag-ears
+
+Compile and install with:
+
     make
     sudo make install
 
