@@ -26,9 +26,11 @@
 // after motors have been stopped. If signal is high when a command is received
 // in idle state, we consider ears were moved and position is therefore unknown.
 
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/gpio/consumer.h>
 #include <linux/fs.h>
@@ -146,7 +148,11 @@ static ssize_t ear_write(struct file *file, const char __user *buffer, size_t le
 
 static int init_ear(struct device *dev, struct tagtagtagear_data *priv, struct class *ears_class, int major, int minor, const char* encoder_name, const char* motor_name);
 static int tagtagtagears_probe(struct platform_device *pdev);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
 static int tagtagtagears_remove(struct platform_device *pdev);
+#else
+static void tagtagtagears_remove(struct platform_device *pdev);
+#endif
 
 static int position_add(int position, int increment);
 
@@ -885,7 +891,11 @@ static int tagtagtagears_probe(struct platform_device *pdev) {
     }
 
 	// Create device class
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
 	priv->ears_class = class_create(THIS_MODULE, DEVICE_NAME);
+#else
+	priv->ears_class = class_create(DEVICE_NAME);
+#endif
 	if (IS_ERR(priv->ears_class)) {
 		err = PTR_ERR(priv->ears_class);
         dev_err(dev, "class_create failed: %d", err);
@@ -910,7 +920,11 @@ static int tagtagtagears_probe(struct platform_device *pdev) {
     return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
 static int tagtagtagears_remove(struct platform_device *pdev) {
+#else
+static void tagtagtagears_remove(struct platform_device *pdev) {
+#endif
     struct tagtagtagears_data *priv;
     int ix;
     priv = platform_get_drvdata(pdev);
@@ -928,7 +942,9 @@ static int tagtagtagears_remove(struct platform_device *pdev) {
         }
         unregister_chrdev_region(priv->chrdev, 2);
     }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
     return 0;
+#endif
 }
 
 #ifdef CONFIG_OF
